@@ -50,9 +50,8 @@ HostDesc::HostDesc(string host, string identity_file) {
 #endif
 
     // Check if there's a username given.
-    bool username_given = false;
     if (this->host_.find("@") != string::npos) {
-        username_given = true;
+        this->username_given = true;
         int i = this->host_.find("@");
         this->username_ = this->host_.substr(0, i);
         this->host_ = this->host_.substr(i + 1);
@@ -90,9 +89,8 @@ HostDesc::HostDesc(string host, string identity_file) {
         }
     }
 
-    bool port_given = false;
     if (!port_string.empty()) {
-        port_given = true;
+        this->port_given = true;
 
         if (!all_of(port_string.begin(), port_string.end(), ::isdigit)) {
             throw invalid_argument("non-digit port number");
@@ -117,73 +115,11 @@ HostDesc::HostDesc(string host, string identity_file) {
 #endif
     try_ssh_config_paths.push_back(home + "/.ssh/config");
 
-    bool hostname_set = false;
-    bool identityfile_set = false;
-    bool user_set = false;
-    bool port_set = false;
-
     // Look through each potential ssh config file.
     for (auto path : try_ssh_config_paths) {
         try {
-            if (!exists(path)) {
-                continue;
-            }
-
-            // Parse the .ssh/config file.
-            ifstream infile(path);
-            string line, cur_host;
-            while (getline(infile, line)) {
-                istringstream iss(line);
-                string cmd;
-                iss >> cmd;
-                transform(cmd.begin(), cmd.end(), cmd.begin(), ::tolower);
-
-                if (cmd == "host") {
-                    iss >> cur_host;
-                    cur_host = strip_quotes(cur_host);
-                    transform(cur_host.begin(), cur_host.end(), cur_host.begin(), ::tolower);
-                }
-
-                if (cur_host == this->display_host_ || cur_host.empty() || cur_host == "*") {
-                    if (cmd == "hostname" && !hostname_set) {
-                        hostname_set = true;
-                        string hostname;
-                        iss >> hostname;
-                        hostname = strip_quotes(hostname);
-                        this->host_ = hostname;
-                    } else if (cmd == "identityfile" && !identityfile_set) {
-                        identityfile_set = true;
-                        string identity_file;
-                        iss >> identity_file;
-                        identity_file = strip_quotes(identity_file);
-
-                        // Expand homedir tilde.
-                        if (identity_file[0] == '~') {
-                            identity_file = home + identity_file.substr(1);
-                        }
-
-                        this->identity_files_.push_back(identity_file);
-                    } else if (cmd == "user" && !username_given && !user_set) {
-                        user_set = true;
-                        string user;
-                        iss >> user;
-                        user = strip_quotes(user);
-                        this->username_ = user;
-                    } else if (cmd == "port" && !port_given && !port_set) {
-                        port_set = true;
-                        string ps;
-                        iss >> ps;
-                        ps = strip_quotes(ps);
-
-                        if (!all_of(ps.begin(), ps.end(), ::isdigit)) {
-                            throw invalid_argument("non-digit port number in ssh config");
-                        }
-                        this->port_ = stoi(string(ps));
-                        if (!(0 < this->port_ && this->port_ < 65536)) {
-                            throw invalid_argument("invalid port number ssh config");
-                        }
-                    }
-                }
+            if (exists(path)) {
+                ParseConfigFile(path);
             }
         } catch (invalid_argument) {
             throw;
@@ -210,6 +146,94 @@ HostDesc::HostDesc(string host, string identity_file) {
     // An allow-list regex would be better, but too tricky due to internationalized domain names.
     if (regex_search(this->host_, regex("[/\\\\]"))) {
         throw invalid_argument("invalid host name");
+    }
+}
+
+void HostDesc::ParseConfigFile(string path) {
+    // Copy-paste :(
+#ifdef __WXMSW__
+    string home = getenv("HOMEPATH");
+#else
+    string home = getenv("HOME");
+#endif
+    ifstream infile(path);
+    string line, cur_host;
+    while (getline(infile, line)) {
+        istringstream iss(line);
+        string cmd;
+        iss >> cmd;
+        transform(cmd.begin(), cmd.end(), cmd.begin(), ::tolower);
+
+        if (cmd == "include") {
+            string include_path;
+            iss >> include_path;
+            include_path = strip_quotes(include_path);
+
+            // Expand homedir tilde.
+            if (include_path[0] == '~') {
+                include_path = home + include_path.substr(1);
+            }
+            // If the include path is relative, make it absolute based on the current config file's location.
+            if (include_path[0] != '/') {
+                size_t last_slash_idx = path.find_last_of("/\\");
+                if (last_slash_idx != std::string::npos) {
+                    include_path = path.substr(0, last_slash_idx + 1) + include_path;
+                }
+            } 
+
+            // Recursively parse the included file.
+            if (exists(include_path)) {
+                ParseConfigFile(include_path);
+            }
+            continue;
+        }
+
+        if (cmd == "host") {
+            iss >> cur_host;
+            cur_host = strip_quotes(cur_host);
+            transform(cur_host.begin(), cur_host.end(), cur_host.begin(), ::tolower);
+        }
+
+        if (cur_host == this->display_host_ || cur_host.empty() || cur_host == "*") {
+            if (cmd == "hostname" && !this->hostname_set) {
+                this->hostname_set = true;
+                string hostname;
+                iss >> hostname;
+                hostname = strip_quotes(hostname);
+                this->host_ = hostname;
+            } else if (cmd == "identityfile" && !this->identityfile_set) {
+                this->identityfile_set = true;
+                string identity_file;
+                iss >> identity_file;
+                identity_file = strip_quotes(identity_file);
+
+                // Expand homedir tilde.
+                if (identity_file[0] == '~') {
+                    identity_file = home + identity_file.substr(1);
+                }
+
+                this->identity_files_.push_back(identity_file);
+            } else if (cmd == "user" && !this->username_given && !this->user_set) {
+                this->user_set = true;
+                string user;
+                iss >> user;
+                user = strip_quotes(user);
+                this->username_ = user;
+            } else if (cmd == "port" && !this->port_given && !this->port_set) {
+                this->port_set = true;
+                string ps;
+                iss >> ps;
+                ps = strip_quotes(ps);
+
+                if (!all_of(ps.begin(), ps.end(), ::isdigit)) {
+                    throw invalid_argument("non-digit port number in ssh config");
+                }
+                this->port_ = stoi(string(ps));
+                if (!(0 < this->port_ && this->port_ < 65536)) {
+                    throw invalid_argument("invalid port number ssh config");
+                }
+            }
+        }
     }
 }
 

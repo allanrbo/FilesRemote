@@ -18,10 +18,18 @@ public:
     int port_ = 22;
     bool is_ipv6_literal_ = false;
     vector<string> identity_files_;
+    bool hostname_set = false;
+    bool identityfile_set = false;
+    bool username_given = false;
+    bool user_set = false;
+    bool port_given = false;
+    bool port_set = false;
 
     HostDesc() {}
 
     explicit HostDesc(string host, string identity_file);
+
+    void ParseConfigFile(string path);
 
     string ToString();
 
